@@ -328,7 +328,7 @@ export const packages = {
   async list() {
     const rows = await dbQuery(`
       SELECT id, packageName, diskSpace, bandwidth, emailAccounts,
-             dataBases, ftpAccounts, allowedDomains
+             \`dataBases\`, ftpAccounts, allowedDomains
       FROM packages_package
       ORDER BY id
     `);
