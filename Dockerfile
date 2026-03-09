@@ -1,17 +1,19 @@
 FROM node:20-alpine AS base
+RUN apk add --no-cache openssl
 
-# Install dependencies only when needed
+# Install dependencies
 FROM base AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY prisma ./prisma
 RUN npm ci
+RUN npx prisma generate
 
 # Build the app
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN node node_modules/prisma/build/index.js generate
 RUN npm run build
 
 # Production image
