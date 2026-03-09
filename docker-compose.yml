@@ -1,0 +1,22 @@
+services:
+  panel:
+    build: .
+    container_name: hostinger-panel
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - adsmaa_default
+
+networks:
+  adsmaa_default:
+    external: true
