@@ -1,18 +1,49 @@
 // ---------------------------------------------------------------------------
-// CyberPanel API Client
+// CyberPanel API Client + MariaDB Direct Queries
 // ---------------------------------------------------------------------------
-// CyberPanel runs on port 8090. Every API call is a POST request that
-// includes admin credentials in the JSON body.
+// CyberPanel's REST API only supports create/delete/status actions.
+// For listing websites, packages, databases, emails, etc. we query
+// CyberPanel's MariaDB database directly (read-only).
 //
 // Required environment variables:
-//   CYBERPANEL_URL          - e.g. "https://your-vps-ip:8090" (no trailing slash)
+//   CYBERPANEL_URL          - e.g. "https://your-vps-ip:8090"
 //   CYBERPANEL_ADMIN_USER   - usually "admin"
 //   CYBERPANEL_ADMIN_PASS   - the admin password
+//   CYBERPANEL_DB_HOST      - MariaDB host (default: 127.0.0.1)
+//   CYBERPANEL_DB_USER      - MariaDB user (default: cyberpanel_api)
+//   CYBERPANEL_DB_PASS      - MariaDB password
 // ---------------------------------------------------------------------------
+
+import mysql from "mysql2/promise";
 
 const CYBERPANEL_URL = process.env.CYBERPANEL_URL || "";
 const ADMIN_USER = process.env.CYBERPANEL_ADMIN_USER || "admin";
 const ADMIN_PASS = process.env.CYBERPANEL_ADMIN_PASS || "";
+
+// ---- MariaDB connection pool ----------------------------------------------
+
+let pool: mysql.Pool | null = null;
+
+function getPool(): mysql.Pool {
+  if (!pool) {
+    pool = mysql.createPool({
+      host: process.env.CYBERPANEL_DB_HOST || "127.0.0.1",
+      port: Number(process.env.CYBERPANEL_DB_PORT) || 3306,
+      user: process.env.CYBERPANEL_DB_USER || "cyberpanel_api",
+      password: process.env.CYBERPANEL_DB_PASS || "",
+      database: "cyberpanel",
+      waitForConnections: true,
+      connectionLimit: 5,
+    });
+  }
+  return pool;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function dbQuery(sql: string, params: any[] = []): Promise<any[]> {
+  const [rows] = await getPool().execute(sql, params);
+  return rows as any[];
+}
 
 // ---- Types ----------------------------------------------------------------
 
@@ -93,7 +124,7 @@ interface BackupRestoreInput {
   websiteName: string;
 }
 
-// ---- Base helper ----------------------------------------------------------
+// ---- API helper (for create/delete/action operations) ---------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function cpRequest(
@@ -104,8 +135,9 @@ async function cpRequest(
     throw new Error("CyberPanel URL not configured");
   }
 
-  // CyberPanel uses self-signed certs; disable TLS verification for this request
-  const agent = new (await import("https")).Agent({ rejectUnauthorized: false });
+  const agent = new (await import("https")).Agent({
+    rejectUnauthorized: false,
+  });
 
   const res = await fetch(`${CYBERPANEL_URL}/api/${endpoint}`, {
     method: "POST",
@@ -151,8 +183,31 @@ export const websites = {
     return cpRequest("deleteWebsite", { domainName });
   },
 
-  list(page?: number) {
-    return cpRequest("fetchWebsites", { page: page || 1 });
+  async list() {
+    const rows = await dbQuery(`
+      SELECT w.id, w.domain, w.adminEmail, w.phpSelection, w.ssl, w.state,
+             w.externalApp, p.packageName,
+             GROUP_CONCAT(c.domain) as childDomains
+      FROM websiteFunctions_websites w
+      LEFT JOIN packages_package p ON w.package_id = p.id
+      LEFT JOIN websiteFunctions_childdomains c ON c.master_id = w.id
+      GROUP BY w.id
+      ORDER BY w.id DESC
+    `);
+    return {
+      data: rows.map((r: any) => ({
+        id: r.id,
+        domain: r.domain,
+        adminEmail: r.adminEmail,
+        phpVersion: r.phpSelection,
+        ssl: r.ssl === 1,
+        is_enabled: r.state === 1,
+        status: r.state === 1 ? "active" : "suspended",
+        package: r.packageName,
+        externalApp: r.externalApp,
+        childDomains: r.childDomains ? r.childDomains.split(",") : [],
+      })),
+    };
   },
 
   suspend(domainName: string) {
@@ -170,7 +225,7 @@ export const websites = {
   },
 
   changePackage(domainName: string, packageName: string) {
-    return cpRequest("changePackageForWebsite", {
+    return cpRequest("changePackageAPI", {
       websiteName: domainName,
       packageName,
     });
@@ -186,8 +241,16 @@ export const databases = {
     return cpRequest("submitDBDeletion", { dbName });
   },
 
-  list(domainName: string) {
-    return cpRequest("fetchDatabases", { databaseWebsite: domainName });
+  async list(domainName: string) {
+    const rows = await dbQuery(
+      `SELECT d.id, d.dbName, u.user as dbUser
+       FROM databases_databases d
+       LEFT JOIN databases_databasesusers u ON u.db_id = d.id
+       LEFT JOIN websiteFunctions_websites w ON d.website_id = w.id
+       WHERE w.domain = ?`,
+      [domainName],
+    );
+    return { data: rows };
   },
 } as const;
 
@@ -200,8 +263,15 @@ export const email = {
     return cpRequest("submitEmailDeletion", { emailAddress });
   },
 
-  list(domainName: string) {
-    return cpRequest("getEmailsForDomain", { domainName });
+  async list(domainName: string) {
+    const rows = await dbQuery(
+      `SELECT u.id, u.email, u.quota
+       FROM e_users u
+       LEFT JOIN e_domains d ON u.domain_id = d.id
+       WHERE d.domain = ?`,
+      [domainName],
+    );
+    return { data: rows };
   },
 
   changePassword(data: EmailChangePasswordInput) {
@@ -218,8 +288,13 @@ export const ftp = {
     return cpRequest("submitFTPDeletion", { ftpUsername });
   },
 
-  list(domainName: string) {
-    return cpRequest("getAllFTPAccounts", { domainName });
+  async list(domainName: string) {
+    // Pure-FTPd uses MariaDB for virtual users
+    const rows = await dbQuery(
+      `SELECT User, Dir FROM ftpd.users WHERE User LIKE ?`,
+      [`%_${domainName}`],
+    ).catch(() => []);
+    return { data: rows };
   },
 
   changePassword(data: FtpChangePasswordInput) {
@@ -232,8 +307,12 @@ export const ssl = {
     return cpRequest("issueSSL", { domainName });
   },
 
-  status(domainName: string) {
-    return cpRequest("getSSLStatus", { domainName });
+  async status(domainName: string) {
+    const rows = await dbQuery(
+      `SELECT ssl FROM websiteFunctions_websites WHERE domain = ?`,
+      [domainName],
+    );
+    return { ssl: rows[0]?.ssl === 1 };
   },
 } as const;
 
@@ -246,8 +325,14 @@ export const packages = {
     return cpRequest("submitPackageDeletion", { packageName });
   },
 
-  list() {
-    return cpRequest("listPackage");
+  async list() {
+    const rows = await dbQuery(`
+      SELECT id, packageName, diskSpace, bandwidth, emailAccounts,
+             dataBases, ftpAccounts, allowedDomains
+      FROM packages_package
+      ORDER BY id
+    `);
+    return { data: rows };
   },
 } as const;
 
@@ -260,11 +345,16 @@ export const dns = {
     return cpRequest("deleteDNSRecord", data);
   },
 
-  list(domainName: string) {
-    return cpRequest("getCurrentRecordsForDomain", {
-      currentSelection: domainName,
-      selectedRecordType: "",
-    });
+  async list(domainName: string) {
+    const rows = await dbQuery(
+      `SELECT r.id, r.name, r.type, r.content, r.ttl, r.prio as priority
+       FROM records r
+       LEFT JOIN domains d ON r.domain_id = d.id
+       WHERE d.name = ?
+       ORDER BY r.type, r.name`,
+      [domainName],
+    );
+    return { data: rows };
   },
 } as const;
 
