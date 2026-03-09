@@ -18,6 +18,7 @@ const ADMIN_PASS = process.env.CYBERPANEL_ADMIN_PASS || "";
 
 interface CyberPanelResponse {
   status?: number;
+  createWebSiteStatus?: number;
   fetchStatus?: string;
   error_message?: string;
   errorMessage?: string;
@@ -26,8 +27,10 @@ interface CyberPanelResponse {
 
 interface WebsiteCreateInput {
   domainName: string;
-  package: string;
-  email: string;
+  packageName: string;
+  ownerEmail: string;
+  websiteOwner: string;
+  ownerPassword: string;
   phpSelection?: string;
 }
 
@@ -101,6 +104,9 @@ async function cpRequest(
     throw new Error("CyberPanel URL not configured");
   }
 
+  // CyberPanel uses self-signed certs; disable TLS verification for this request
+  const agent = new (await import("https")).Agent({ rejectUnauthorized: false });
+
   const res = await fetch(`${CYBERPANEL_URL}/api/${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -109,9 +115,8 @@ async function cpRequest(
       adminPass: ADMIN_PASS,
       ...data,
     }),
-    // CyberPanel often uses self-signed SSL certificates
-    // @ts-expect-error -- Node fetch supports this
-    rejectUnauthorized: false,
+    // @ts-expect-error -- Node 18+ fetch supports dispatcher/agent
+    agent,
   });
 
   if (!res.ok) {
@@ -120,7 +125,11 @@ async function cpRequest(
 
   const result: CyberPanelResponse = await res.json();
 
-  if (result.status === 0 || result.fetchStatus === "failure") {
+  if (
+    result.status === 0 ||
+    result.createWebSiteStatus === 0 ||
+    result.fetchStatus === "failure"
+  ) {
     throw new Error(
       result.error_message ||
         result.errorMessage ||
@@ -238,7 +247,7 @@ export const packages = {
   },
 
   list() {
-    return cpRequest("getPackages");
+    return cpRequest("listPackage");
   },
 } as const;
 
@@ -287,13 +296,13 @@ export {
 // ---- Utility --------------------------------------------------------------
 
 /**
- * Tests connectivity to the CyberPanel instance by calling `getPackages`.
+ * Tests connectivity to the CyberPanel instance by calling `verifyConn`.
  * Returns `true` if the API responds successfully, `false` otherwise.
  */
 export async function testConnection(): Promise<boolean> {
   try {
-    await packages.list();
-    return true;
+    const result = await cpRequest("verifyConn");
+    return result.verifyConn === 1;
   } catch {
     return false;
   }

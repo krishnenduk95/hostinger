@@ -189,11 +189,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create website on Hostinger
+    // Create website on CyberPanel
     const hostingerResult = await cpWebsites.create({
       domainName: domain,
-      package: body.package || "Default",
-      email: body.email || "admin@" + domain,
+      packageName: body.package || "Default",
+      ownerEmail: body.email || "admin@" + domain,
+      websiteOwner: "admin",
+      ownerPassword: process.env.CYBERPANEL_ADMIN_PASS || "",
     });
 
     // Save to local DB with user assignment

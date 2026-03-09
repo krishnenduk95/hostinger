@@ -124,8 +124,10 @@ export async function POST(request: NextRequest) {
 
       const result = await cpWebsites.create({
         domainName,
-        package: pkg,
-        email: email || `admin@${domainName}`,
+        packageName: pkg,
+        ownerEmail: email || `admin@${domainName}`,
+        websiteOwner: "admin",
+        ownerPassword: process.env.CYBERPANEL_ADMIN_PASS || "",
       });
 
       // Track locally

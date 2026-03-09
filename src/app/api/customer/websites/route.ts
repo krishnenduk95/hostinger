@@ -116,8 +116,10 @@ export async function POST(req: NextRequest) {
     // Create website via CyberPanel API
     const cpResult = await cpWebsites.create({
       domainName: domain,
-      package: accounts[0].package || "Default",
-      email: session.email,
+      packageName: accounts[0].package || "Default",
+      ownerEmail: session.email,
+      websiteOwner: "admin",
+      ownerPassword: process.env.CYBERPANEL_ADMIN_PASS || "",
     });
 
     // Create local DB record
