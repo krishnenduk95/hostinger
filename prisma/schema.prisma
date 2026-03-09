@@ -1,0 +1,191 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  CUSTOMER
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  name          String
+  company       String?
+  phone         String?
+  role          Role      @default(CUSTOMER)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  websites           Website[]
+  domains            Domain[]
+  vpsServers         VPS[]
+  invoices           Invoice[]
+  tickets            Ticket[]
+  ticketReplies      TicketReply[]
+  hostingAccounts    HostingAccount[]
+
+  @@map("users")
+}
+
+model Plan {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  type        String   // shared, vps, domain
+  price       Float    // monthly price in INR
+  features    Json     // { websites: 1, storage: "10GB", bandwidth: "100GB", etc }
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  invoices    Invoice[]
+
+  @@map("plans")
+}
+
+model Website {
+  id              String   @id @default(cuid())
+  userId          String?
+  domain          String
+  subdomain       String?
+  hostingerDomain String   // actual domain on hostinger
+  orderId         Int      // hostinger order id
+  rootDirectory   String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("websites")
+}
+
+model Domain {
+  id              String   @id @default(cuid())
+  userId          String?
+  domain          String   @unique
+  hostingerId     Int?     // hostinger domain id
+  type            String   // domain, free_domain
+  status          String   @default("active")
+  registeredAt    DateTime?
+  expiresAt       DateTime?
+  autoRenew       Boolean  @default(true)
+  privacyEnabled  Boolean  @default(false)
+  lockEnabled     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("domains")
+}
+
+model VPS {
+  id              String   @id @default(cuid())
+  userId          String?
+  hostingerId     Int      @unique // hostinger VM id
+  hostname        String
+  plan            String   // KVM 1, KVM 2, etc
+  state           String   @default("running")
+  ipv4            String?
+  ipv6            String?
+  cpus            Int
+  memory          Int      // MB
+  disk            Int      // MB
+  bandwidth       Int      // MB
+  os              String?
+  dataCenter      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("vps_servers")
+}
+
+model HostingAccount {
+  id            String   @id @default(cuid())
+  userId        String
+  domain        String   @unique
+  package       String
+  status        String   @default("active")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("hosting_accounts")
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  userId      String
+  planId      String?
+  amount      Float
+  currency    String        @default("INR")
+  status      InvoiceStatus @default(PENDING)
+  description String?
+  dueDate     DateTime
+  paidAt      DateTime?
+  period      String?       // monthly, yearly
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan? @relation(fields: [planId], references: [id])
+
+  @@map("invoices")
+}
+
+model Ticket {
+  id        String       @id @default(cuid())
+  userId    String
+  subject   String
+  message   String
+  status    TicketStatus @default(OPEN)
+  priority  String       @default("medium") // low, medium, high, urgent
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replies TicketReply[]
+
+  @@map("tickets")
+}
+
+model TicketReply {
+  id        String   @id @default(cuid())
+  ticketId  String
+  userId    String
+  message   String
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ticket_replies")
+}
